@@ -1,4 +1,4 @@
-vdr-plugin-restfulapi (0.2.1.2-1) UNRELEASED; urgency=medium
+vdr-plugin-restfulapi (0.2.1.2-1) precise; urgency=medium
 
   * Packaging for debian as non-nativ package with upstream tarball
   * Compat 9
@@ -6,7 +6,7 @@ vdr-plugin-restfulapi (0.2.1.2-1) UNRELEASED; urgency=medium
   * Build-depend on vdr-dev >= 2.1.10
   * Maintainer is now Tobias Grimm
 
- -- Tobias Grimm <etobi@debian.org>  Thu, 12 Feb 2015 23:14:32 +0100
+ -- Tobias Grimm <etobi@debian.org>  Thu, 19 Feb 2015 12:16:25 +0100
 
 vdr-plugin-restfulapi (0.2.1.1-0yavdr0~precise) precise; urgency=medium
 
