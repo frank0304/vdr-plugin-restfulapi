@@ -1,3 +1,9 @@
+vdr-plugin-restfulapi (0.2.1.2-2) precise; urgency=medium
+
+  * Build-depend on vdr-dev (>= 2.2.0)
+
+ -- Tobias Grimm <etobi@debian.org>  Thu, 19 Feb 2015 12:39:53 +0100
+
 vdr-plugin-restfulapi (0.2.1.2-1) precise; urgency=medium
 
   * Packaging for debian as non-nativ package with upstream tarball
