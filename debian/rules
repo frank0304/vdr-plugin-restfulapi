@@ -13,12 +13,8 @@ override_dh_strip:
 override_dh_auto_install:
 	LIBDIR=. dh_auto_install --destdir=debian/vdr-plugin-restfulapi
 
-override_dh_gencontrol:
-	sh /usr/share/vdr-dev/dependencies.sh
-	dh_gencontrol
-
 %:
-	dh $@
+	dh $@ --with vdrplugin
 
 archive:
 	git archive --format=tar.gz --prefix=vdr-plugin-restfulapi-${UPSTREAM_VERSION}/ --output=../vdr-plugin-restfulapi_${UPSTREAM_VERSION}.orig.tar.gz master
