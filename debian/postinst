@@ -6,6 +6,7 @@ if [ "$1" = "configure" ]; then
 
     # Change owner of directory for temporary files
     chown -R vdr:vdr /var/lib/vdr/plugins/restfulapi || true
+    chown -R vdr:vdr /var/cache/vdr/plugins/restfulapi || true
 
 fi
 
