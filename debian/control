@@ -11,13 +11,3 @@ Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}, ${vdr:Depends}
 Description: VDR restfulapi
  VDR restfulapi Plugin
-
-Package: vdr-plugin-restfulapi-dbg
-Architecture: any
-Section: debug
-Priority: extra
-Depends: vdr-plugin-restfulapi (= ${binary:Version}), ${misc:Depends}
-Description: debugging symbols for vdr-plugin-restfulapi
- .
- This package contains only the debugging symbols for vdr-plugin-restfulapi
-
