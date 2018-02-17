@@ -52,8 +52,17 @@ void ChannelsResponder::replyChannels(ostream& out, cxxtools::http::Request& req
   int limit_filter = q.getOptionAsInt("limit");
   string group_filter = q.getOptionAsString("group");
 
+  int index = 0;
+
+#if APIVERSNUM > 20300
+    LOCK_CHANNELS_READ;
+    const cChannels& channels = *Channels;
+#else
+    cChannels& channels = Channels;
+#endif
+
   if (channel_details.length() > 0) {
-     cChannel* channel = VdrExtension::getChannel(channel_details);
+     const cChannel* channel = VdrExtension::getChannel(channel_details);
      if (channel == NULL || channel->GroupSep()) {
         reply.httpReturn(403, "The requested channel is not available.");
         delete channelList;
@@ -63,17 +72,23 @@ void ChannelsResponder::replyChannels(ostream& out, cxxtools::http::Request& req
         
         string group = "";
         int total = 0;
-        for (cChannel *channelIt = Channels.First(); channelIt; channelIt = Channels.Next(channelIt))
+        int c = 0;
+        for (const cChannel *channelIt = channels.First(); channelIt; channelIt = channels.Next(channelIt))
         { 
-           if (!channelIt->GroupSep()) 
-              total++; 
-           else
+           if (!channelIt->GroupSep()) {
+              total++;
+              if (strcmp(channelIt->Name(), channel->Name()) == 0) {
+        	  index = c;
+              }
+           } else
               if ( total < channel->Number())
                  group = channelIt->Name();
+
+           c++;
         }
         channelList->setTotal(total);
         string image = FileCaches::get()->searchChannelLogo(channel);
-        channelList->addChannel(channel, group, image.length() == 0);
+        channelList->addChannel(channel, group, image.length() == 0, index);
      }
   } else {
      if ( start_filter >= 0 && limit_filter >= 1 ) {
@@ -82,17 +97,18 @@ void ChannelsResponder::replyChannels(ostream& out, cxxtools::http::Request& req
      channelList->init();
      int total = 0;
      string group = "";
-     for (cChannel *channel = Channels.First(); channel; channel = Channels.Next(channel))
+     for (const cChannel *channel = channels.First(); channel; channel = channels.Next(channel))
      {
        if (!channel->GroupSep()) {
           if ( group_filter.length() == 0 || group == group_filter ) {
              string image = FileCaches::get()->searchChannelLogo(channel);
-             channelList->addChannel(channel, group, image.length() != 0);
+             channelList->addChannel(channel, group, image.length() != 0, index);
              total++;
           }
        } else {
          group = channel->Name();
        }
+       index++;
      }
      channelList->setTotal(total);
   }
@@ -107,7 +123,7 @@ void ChannelsResponder::replyImage(ostream& out, cxxtools::http::Request& reques
   QueryHandler q("/channels/image/", request);
   
   string channelid = q.getParamAsString(0);
-  cChannel* channel = VdrExtension::getChannel(channelid);
+  const cChannel* channel = VdrExtension::getChannel(channelid);
   string imageFolder = Settings::get()->ChannelLogoDirectory() + (string)"/";
   double timediff = -1;
   
@@ -130,7 +146,13 @@ void ChannelsResponder::replyImage(ostream& out, cxxtools::http::Request& reques
   }
 
   if (timediff > 0.0 || timediff < 0.0) {
-      string contenttype = (string)"image/" + imageName.substr( imageName.find_last_of('.') + 1 );
+
+      string type = imageName.substr( imageName.find_last_of('.') + 1);
+      if ( strcmp(type.c_str(), "svg") == 0 ) {
+          type = "svg+xml";
+      }
+      string contenttype = (string)"image/" + type;
+
       if ( se.writeBinary(absolute_path) ) {
 	  FileExtension::get()->addModifiedHeader(absolute_path, reply);
          reply.addHeader("Content-Type", contenttype.c_str());
@@ -169,8 +191,15 @@ void ChannelsResponder::replyGroups(ostream& out, cxxtools::http::Request& reque
 
   channelGroupList->init();
   int total = 0;
-  
-  for (cChannel *channel = Channels.First(); channel; channel = Channels.Next(channel))
+
+
+#if APIVERSNUM > 20300
+    LOCK_CHANNELS_READ;
+    const cChannels& channels = *Channels;
+#else
+    cChannels& channels = Channels;
+#endif
+  for (const cChannel *channel = channels.First(); channel; channel = channels.Next(channel))
   {
       if (channel->GroupSep()) {
          channelGroupList->addGroup((std::string)channel->Name());
@@ -198,11 +227,13 @@ void operator<<= (cxxtools::SerializationInfo& si, const SerChannel& c)
   si.addMember("is_terr") <<= c.IsTerr;
   si.addMember("is_sat") <<= c.IsSat;
   si.addMember("is_radio") <<= c.IsRadio;
+  si.addMember("index") <<= c.index;
 }
 
 ChannelList::ChannelList(ostream* _out)
 {
   s = new StreamExtension(_out);
+  total = 0;
 }
 
 ChannelList::~ChannelList()
@@ -216,7 +247,7 @@ void HtmlChannelList::init()
   s->write("<ul>");
 }
 
-void HtmlChannelList::addChannel(cChannel* channel, string group, bool image)
+void HtmlChannelList::addChannel(const cChannel* channel, string group, bool image, int index)
 {
   if ( filtered() ) return;
 
@@ -231,7 +262,7 @@ void HtmlChannelList::finish()
   s->write("</body></html>");
 }
 
-void JsonChannelList::addChannel(cChannel* channel, string group, bool image)
+void JsonChannelList::addChannel(const cChannel* channel, string group, bool image, int index)
 {  
   if ( filtered() ) return;
 
@@ -245,16 +276,12 @@ void JsonChannelList::addChannel(cChannel* channel, string group, bool image)
   serChannel.Group = StringExtension::UTF8Decode(group);
   serChannel.Transponder = channel->Transponder();
   serChannel.Stream = StringExtension::UTF8Decode(((string)channel->GetChannelID().ToString() + (string)suffix).c_str());
-  // TODO: There is an atsc Patch
-  #if APIVERSNUM >= 10714
   serChannel.IsAtsc = channel->IsAtsc();
-  #else
-  serChannel.IsAtsc = false;
-  #endif
   serChannel.IsCable = channel->IsCable();
   serChannel.IsSat = channel->IsSat();
   serChannel.IsTerr = channel->IsTerr();
   serChannel.IsRadio = VdrExtension::IsRadio(channel);
+  serChannel.index = index;
   serChannels.push_back(serChannel);
 }
 
@@ -273,7 +300,7 @@ void XmlChannelList::init()
   s->write("<channels xmlns=\"http://www.domain.org/restfulapi/2011/channels-xml\">\n");
 }
 
-void XmlChannelList::addChannel(cChannel* channel, string group, bool image)
+void XmlChannelList::addChannel(const cChannel* channel, string group, bool image, int index)
 {
   if ( filtered() ) return;
 
@@ -287,17 +314,13 @@ void XmlChannelList::addChannel(cChannel* channel, string group, bool image)
   s->write(cString::sprintf("  <param name=\"group\">%s</param>\n", StringExtension::encodeToXml( group ).c_str()));
   s->write(cString::sprintf("  <param name=\"transponder\">%i</param>\n", channel->Transponder()));
   s->write(cString::sprintf("  <param name=\"stream\">%s</param>\n", StringExtension::encodeToXml( ((string)channel->GetChannelID().ToString() + (string)suffix).c_str()).c_str()));
-  // TODO: There is an atsc Patch
-  #if APIVERSNUM >= 10714
   s->write(cString::sprintf("  <param name=\"is_atsc\">%s</param>\n", channel->IsAtsc() ? "true" : "false"));
-  #else
-  s->write(cString::sprintf("  <param name=\"is_atsc\">%s</param>\n", false ? "true" : "false"));
-  #endif
   s->write(cString::sprintf("  <param name=\"is_cable\">%s</param>\n", channel->IsCable() ? "true" : "false"));
   s->write(cString::sprintf("  <param name=\"is_sat\">%s</param>\n", channel->IsSat() ? "true" : "false"));
   s->write(cString::sprintf("  <param name=\"is_terr\">%s</param>\n", channel->IsTerr() ? "true" : "false"));
   bool is_radio = VdrExtension::IsRadio(channel);
   s->write(cString::sprintf("  <param name=\"is_radio\">%s</param>\n", is_radio ? "true" : "false"));
+  s->write(cString::sprintf("  <param name=\"index\">%i</param>\n", index));
   s->write(" </channel>\n");
 }
 
@@ -310,6 +333,7 @@ void XmlChannelList::finish()
 ChannelGroupList::ChannelGroupList(std::ostream* _out) 
 {
   s = new StreamExtension(_out);
+  total = 0;
 }
 
 ChannelGroupList::~ChannelGroupList()
@@ -326,10 +350,7 @@ void HtmlChannelGroupList::init()
 void HtmlChannelGroupList::addGroup(string group)
 {
   if ( filtered() ) return;
-
-  s->write("<li>");
-  s->write(group.c_str());
-  s->write("\n");
+  s->write(cString::sprintf("<li>%s</li>", group.c_str()));
 }
 
 void HtmlChannelGroupList::finish()

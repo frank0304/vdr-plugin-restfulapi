@@ -83,6 +83,7 @@ public:
 	SearchTimer( std::string const& data );
 	void Init();
         std::string LoadFromQuery(QueryHandler& q);
+        std::string LoadCommonFromQuery(QueryHandler& q);
 	std::string ToText();
         std::string ToXml();
         std::string ToHtml();
@@ -122,6 +123,10 @@ public:
 	void SetChannelText(std::string channels) { m_channels = channels; }
 	int UseAsSearchTimer() const { return m_useAsSearchtimer; }
 	void SetUseAsSearchTimer(int useAsSearchtimer) { m_useAsSearchtimer = useAsSearchtimer; }
+	time_t UseAsSearchTimerFrom() const { return m_useAsSearchTimerFrom; }
+	void SetUseAsSearchTimerFrom(time_t useAsSearchtimerFrom) { m_useAsSearchTimerFrom = useAsSearchtimerFrom; }
+	time_t UseAsSearchTimerTil() const { return m_useAsSearchTimerTil; }
+	void SetUseAsSearchTimerTil(time_t useAsSearchtimerTil) { m_useAsSearchTimerTil = useAsSearchtimerTil; }
 	bool UseDuration() const { return m_useDuration; }
 	void SetUseDuration(bool useDuration) { m_useDuration = useDuration; }
 	int MinDuration() const { return m_minDuration; }
@@ -146,8 +151,10 @@ public:
 	void SetKeepRecs(int recordingsKeep) { m_recordingsKeep = recordingsKeep; }
 	int PauseOnRecs() const {return m_pauseOnNrRecordings; }
 	void SetPauseOnRecs(int pauseOnNrRecordings) { m_pauseOnNrRecordings = pauseOnNrRecordings; }
-	int BlacklistMode() const {return m_blacklistmode; }
+	int BlacklistMode() const { return m_blacklistmode; }
 	void SetBlacklistMode(int blacklistmode) { m_blacklistmode = blacklistmode; }
+	std::vector< int > BlacklistIds() const { return m_blacklistIDs; }
+	void SetBlacklistIds(std::vector< int > blacklist_ids) { m_blacklistIDs = blacklist_ids; }
 	bool BlacklistSelected(int id) const;
 	void ParseBlacklist( std::string const& data );
 	int SwitchMinBefore() const { return m_switchMinBefore; }
@@ -186,6 +193,21 @@ public:
 	void SetDelAfterCountRecs(int delAfterCountRecs) { m_delAfterCountRecs = delAfterCountRecs; }
 	int DelAfterDaysOfFirstRec() const { return m_delAfterDaysOfFirstRec; }
 	void SetDelAfterDaysOfFirstRec(int delAfterDaysOfFirstRec) { m_delAfterDaysOfFirstRec = delAfterDaysOfFirstRec; }
+
+	bool IgnoreMissingEPGCats() const { return m_ignoreMissingEPGCats; }
+	void SetIgnoreMissingEPGCats(bool ignoreMissingEPGCats) { m_ignoreMissingEPGCats = ignoreMissingEPGCats; }
+
+	bool UnmuteSoundOnSwitch() const { return m_unmuteSoundOnSwitch; }
+	void SetUnmuteSoundOnSwitch(bool p) { m_unmuteSoundOnSwitch = p; }
+
+	int SummaryMatch() const { return m_summaryMatch; }
+	void SetSummaryMatch(int p) { m_summaryMatch = p; }
+
+	std::string const& ContentRecognition() const { return m_contentDescriptors; }
+	void SetContentRecognition(std::string const& s) { m_contentDescriptors = s; }
+
+	int CompareTime() const { return m_compareTime; }
+	void SetCompareTime(int p) { m_compareTime = p; }
 
 private:
 	int m_id;
@@ -231,7 +253,7 @@ private:
 	bool m_compareSummary;
 	int m_repeatsWithinDays;
 	int m_blacklistmode;
-	std::vector< std::string > m_blacklistIDs;
+	std::vector< int > m_blacklistIDs;
 	int m_menuTemplate;
 	unsigned long m_catvaluesAvoidRepeat;
 	int m_delMode;
@@ -240,6 +262,10 @@ private:
 	time_t m_useAsSearchTimerFrom;
 	time_t m_useAsSearchTimerTil;
 	bool m_ignoreMissingEPGCats;
+	bool m_unmuteSoundOnSwitch;
+	int m_summaryMatch;
+	std::string m_contentDescriptors;
+	int m_compareTime;
 
 	void ParseChannel( std::string const& data );
 	void ParseChannelIDs( std::string const& data );
@@ -254,12 +280,14 @@ public:
 	std::string Name() const { return m_menuname; }
 	std::vector< std::string > Values() const { return m_values; }
 	bool Selected(unsigned int index, std::string const& values);
+	std::string Get() { return m_data; };
 private:
 	int m_id;
 	std::string m_name;
 	std::string m_menuname;
 	std::vector< std::string > m_values;
 	int m_searchmode;
+	std::string m_data;
 
 	void ParseValues( std::string const& data );
 };
@@ -289,8 +317,10 @@ class ChannelGroup
 public:
 	ChannelGroup(std::string const& data );
 	std::string Name() { return m_name; }
+	std::string Get() { return m_data; };
 private:
 	std::string m_name;
+	std::string m_data;
 };
 
 class ChannelGroups
@@ -391,7 +421,7 @@ public:
 	int TimerMode() const { return m_timerMode; }
 	bool operator<( SearchResult const& other ) const { return m_starttime <  other.m_starttime; }
 	const cEvent* GetEvent();
-	const cChannel* GetChannel() { return Channels.GetByChannelID(m_channel); }
+	const cChannel* GetChannel();
 
 private:
 	int m_searchId;
@@ -466,6 +496,39 @@ public:
 };
 
 
+class TimerConflict {
+public:
+	TimerConflict();
+	time_t Next() const { return nextConflict; }
+	int Relevant() const { return relevantConflicts; }
+	int Total() const { return totalConflicts; }
+
+private:
+	time_t nextConflict;       // next conflict date, 0 if none
+	int relevantConflicts;     // number of relevant conflicts
+	int totalConflicts;        // total number of conflicts
+};
+
+class TimerConflicts {
+public:
+	typedef std::list< std::string > TimerConflictList;
+	typedef TimerConflictList::size_type size_type;
+	typedef TimerConflictList::iterator iterator;
+	typedef TimerConflictList::const_iterator const_iterator;
+
+	TimerConflicts();
+
+	size_type size() const { return m_list.size(); }
+	bool CheckAdvised() { return m_checkAdvised; }
+
+	iterator begin() { return m_list.begin(); }
+	const_iterator begin() const { return m_list.begin(); }
+	iterator end() { return m_list.end(); }
+	const_iterator end() const { return m_list.end(); }
+private:
+	TimerConflictList m_list;
+	bool m_checkAdvised;
+};
 
 
 }

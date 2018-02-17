@@ -12,17 +12,17 @@ void TimersResponder::reply(ostream& out, cxxtools::http::Request& request, cxxt
   }
 
   if ( request.method() == "GET" ) {
-     showTimers(out, request, reply);
-  } else if ( request.method() == "DELETE" ) {
-     deleteTimer(out, request, reply);
+      showTimers(out, request, reply);
+  } else if ( request.method() == "DELETE" && (int)request.url().find("/timers/bulkdelete") == 0 ) {
+      replyBulkdelete(out, request, reply);
+  } else if (request.method() == "DELETE") {
+      deleteTimer(out, request, reply);
   } else if ( request.method() == "POST" ) {
-     createOrUpdateTimer(out, request, reply, false);
+      createOrUpdateTimer(out, request, reply, false);
   } else if ( request.method() == "PUT" ) {
-     createOrUpdateTimer(out, request, reply, true);
-  } else if (request.method() == "OPTIONS") {
-     return;
+      createOrUpdateTimer(out, request, reply, true);
   } else {
-     reply.httpReturn(501, "Only GET, DELETE, POST and PUT methods are supported.");
+      reply.httpReturn(501, "Only GET, DELETE, POST and PUT methods are supported.");
   }
 }
 
@@ -30,10 +30,19 @@ void TimersResponder::createOrUpdateTimer(ostream& out, cxxtools::http::Request&
 {
   QueryHandler q("/timers", request);
 
-  if ( Timers.BeingEdited() ) {
-     reply.httpReturn(502, "Timers are being edited - try again later");
-     return;
-  }
+
+
+#if APIVERSNUM > 20300
+    LOCK_TIMERS_WRITE;
+    cTimers& timers = *Timers;
+#else
+    cTimers& timers = Timers;
+
+	if ( timers.BeingEdited() ) {
+		reply.httpReturn(502, "Timers are being edited - try again later");
+		return;
+	}
+#endif
 
   int error = false;
   string error_values = "";
@@ -48,7 +57,7 @@ void TimersResponder::createOrUpdateTimer(ostream& out, cxxtools::http::Request&
   int start = v.ConvertStart(q.getBodyAsString("start"));
   string weekdays = q.getBodyAsString("weekdays");
   string day = v.ConvertDay(q.getBodyAsString("day"));
-  cChannel* chan = v.ConvertChannel(q.getBodyAsString("channel"));
+  const cChannel* chan = v.ConvertChannel(q.getBodyAsString("channel"));
   cTimer* timer_orig = v.ConvertTimer(q.getBodyAsString("timer_id"));
   
   if ( update == false ) { //create
@@ -102,7 +111,7 @@ void TimersResponder::createOrUpdateTimer(ostream& out, cxxtools::http::Request&
      if ( timer_orig == NULL ) { error = true; error_values += "timer_id, "; }
      if ( !error ) {
         if ( !v.IsFlagsValid(flags) ) { flags = timer_orig->Flags(); }
-        if ( !v.IsFileValid(file) ) { file = (string)timer_orig->File(); }
+        if ( !v.IsFileValid(file) ) { file = v.ConvertFile((string)timer_orig->File()); }
         if ( !v.IsLifetimeValid(lifetime) ) { lifetime = timer_orig->Lifetime(); }
         if ( !v.IsPriorityValid(priority) ) { priority = timer_orig->Priority(); }
         if ( !v.IsStopValid(stop) ) { stop = timer_orig->Stop(); }
@@ -110,6 +119,7 @@ void TimersResponder::createOrUpdateTimer(ostream& out, cxxtools::http::Request&
         if ( !v.IsWeekdaysValid(weekdays) ) { weekdays = v.ConvertWeekdays(timer_orig->WeekDays()); }
         if ( !v.IsDayValid(day) ) { day = v.ConvertDay(timer_orig->Day()); }
         if ( chan == NULL ) { chan = (cChannel*)timer_orig->Channel(); }
+        if ( aux == "" ) { aux = v.ConvertAux(timer_orig->Aux()); }
      }
   }
 
@@ -136,16 +146,24 @@ void TimersResponder::createOrUpdateTimer(ostream& out, cxxtools::http::Request&
   if ( update == false ) { // create timer
      cTimer* timer = new cTimer();
      if ( timer->Parse(builder.str().c_str()) ) { 
-        cTimer* checkTimer = Timers.GetTimer(timer);
+        cTimer* checkTimer = timers.GetTimer(timer);
         if ( checkTimer != NULL ) {
            delete timer;
            reply.httpReturn(403, "Timer already defined!"); 
            esyslog("restfulapi: Timer already defined!");
         } else {
            replyCreatedId(timer, request, reply, out);
+#if APIVERSNUM > 20300
+
+           LOCK_SCHEDULES_READ;
+           timer->SetEventFromSchedule(Schedules);
+#else
            timer->SetEventFromSchedule();
-           Timers.Add(timer);
-           Timers.SetModified();
+#endif
+           timers.Add(timer);
+#if APIVERSNUM <= 20300
+           timers.SetModified();
+#endif
            esyslog("restfulapi: timer created!");
         }
      } else {
@@ -154,8 +172,14 @@ void TimersResponder::createOrUpdateTimer(ostream& out, cxxtools::http::Request&
      }
   } else {
      if ( timer_orig->Parse(builder.str().c_str()) ) {
-        timer_orig->SetEventFromSchedule();
-        Timers.SetModified();
+#if APIVERSNUM > 20300
+
+           LOCK_SCHEDULES_READ;
+           timer_orig->SetEventFromSchedule(Schedules);
+#else
+           timer_orig->SetEventFromSchedule();
+           timers.SetModified();
+#endif
         replyCreatedId(timer_orig, request, reply, out);
         esyslog("restfulapi: updating timer successful!");
      } else { 
@@ -192,10 +216,17 @@ void TimersResponder::deleteTimer(ostream& out, cxxtools::http::Request& request
 {
   QueryHandler q("/timers", request);
 
-  if ( Timers.BeingEdited() ) {
-     reply.httpReturn(502, "Timers are being edited - try again later");
-     return;
-  }
+#if APIVERSNUM > 20300
+    LOCK_TIMERS_WRITE;
+    cTimers& timers = *Timers;
+#else
+    cTimers& timers = Timers;
+
+	if ( timers.BeingEdited() ) {
+		reply.httpReturn(502, "Timers are being edited - try again later");
+		return;
+	}
+#endif
 
   TimerValues v;
 
@@ -206,20 +237,91 @@ void TimersResponder::deleteTimer(ostream& out, cxxtools::http::Request& request
   } else {
      if ( timer->Recording() ) {
         timer->Skip();
+#if APIVERSNUM > 20300
+        cRecordControls::Process(Timers, time(NULL));
+#else
         cRecordControls::Process(time(NULL));
+#endif
      }
-     Timers.Del(timer);
-     Timers.SetModified();
+     timers.Del(timer);
+     timers.SetModified();
      reply.httpReturn(200, "Timer deleted."); 
   }
 }
+
+void TimersResponder::replyBulkdelete(std::ostream& out, cxxtools::http::Request& request, cxxtools::http::Reply& reply) {
+
+  QueryHandler q("/timers/bulkdelete", request);
+
+#if APIVERSNUM > 20300
+    LOCK_TIMERS_WRITE;
+    cTimers& timers = *Timers;
+#else
+    cTimers& timers = Timers;
+
+	if ( timers.BeingEdited() ) {
+		reply.httpReturn(502, "Timers are being edited - try again later");
+		return;
+	}
+#endif
+
+  TimerDeletedList* list;
+
+  if ( q.isFormat(".json") ) {
+     reply.addHeader("Content-Type", "application/json; charset=utf-8");
+     list = (TimerDeletedList*)new JsonTimerDeletedList(&out);
+  } else if ( q.isFormat(".html") ) {
+     reply.addHeader("Content-Type", "text/html; charset=utf-8");
+     list = (TimerDeletedList*)new HtmlTimerDeletedList(&out);
+  } else if ( q.isFormat(".xml") ) {
+     reply.addHeader("Content-Type", "text/xml; charset=utf-8");
+     list = (TimerDeletedList*)new XmlTimerDeletedList(&out);
+  } else {
+     reply.httpReturn(404, "Resources are not available for the selected format. (Use: .json, .html or .xml)");
+     return;
+  }
+
+  TimerValues v;
+  cTimer* timer;
+
+  vector< string > deleteTimers = q.getBodyAsStringArray("timers");
+  vector< SerBulkDeleted > results;
+  SerBulkDeleted result;
+
+  size_t i;
+
+  list->init();
+
+  for ( i = 0; i < deleteTimers.size(); i++ ) {
+    timer = v.ConvertTimer(deleteTimers[i]);
+    result.id = deleteTimers[i];
+    if ( timer == NULL ) {
+	result.deleted = false;
+    } else {
+      if ( timer->Recording() ) {
+	timer->Skip();
+#if APIVERSNUM > 20300
+        cRecordControls::Process(Timers, time(NULL));
+#else
+        cRecordControls::Process(time(NULL));
+#endif
+      }
+      timers.Del(timer);
+      timers.SetModified();
+      result.deleted = true;
+    }
+    list->addDeleted(result);
+  }
+  list->setTotal((int)deleteTimers.size());
+  list->finish();
+  delete list;
+
+};
 
 void TimersResponder::showTimers(ostream& out, cxxtools::http::Request& request, cxxtools::http::Reply& reply)
 {
   QueryHandler q("/timers", request);
   TimerList* timerList;
- 
-  Timers.SetModified();
 
   if ( q.isFormat(".json") ) {
      reply.addHeader("Content-Type", "application/json; charset=utf-8");
@@ -246,7 +348,7 @@ void TimersResponder::showTimers(ostream& out, cxxtools::http::Request& request,
 
   timerList->init();
 
-  vector< cTimer* > timers = VdrExtension::SortedTimers();
+  vector< const cTimer* > timers = VdrExtension::SortedTimers();
   for (int i=0;i<(int)timers.size();i++)
   {
      if ( VdrExtension::getTimerID(timers[i]) == timer_id || timer_id.length() == 0 ) {
@@ -262,6 +364,7 @@ void TimersResponder::showTimers(ostream& out, cxxtools::http::Request& request,
 void operator<<= (cxxtools::SerializationInfo& si, const SerTimer& t)
 {
   si.addMember("id") <<= t.Id;
+  si.addMember("index") <<= t.Index;
   si.addMember("flags") <<= t.Flags;
   si.addMember("start") <<= t.Start;
   si.addMember("start_timestamp") <<= t.StartTimeStamp;
@@ -297,7 +400,7 @@ void HtmlTimerList::init()
   s->write("<ul>");
 }
 
-void HtmlTimerList::addTimer(cTimer* timer)
+void HtmlTimerList::addTimer(const cTimer* timer)
 {
   if ( filtered() ) return;
   s->write("<li>");
@@ -311,13 +414,14 @@ void HtmlTimerList::finish()
   s->write("</body></html>");
 }
 
-void JsonTimerList::addTimer(cTimer* timer)
+void JsonTimerList::addTimer(const cTimer* timer)
 {
   if ( filtered() ) return;
   static TimerValues v;
 
   SerTimer serTimer;
   serTimer.Id = StringExtension::UTF8Decode(VdrExtension::getTimerID(timer));
+  serTimer.Index = timer->Index() + 1;
   serTimer.Flags = timer->Flags();
   serTimer.Start = timer->Start();
   serTimer.Stop = timer->Stop();
@@ -334,15 +438,8 @@ void JsonTimerList::addTimer(cTimer* timer)
   serTimer.IsActive = (timer->Flags() & tfActive) == tfActive ? true : false;
   serTimer.Aux = StringExtension::UTF8Decode(timer->Aux() != NULL ? timer->Aux() : "");
 
-  int tstart = timer->Day() - ( timer->Day() % 3600 ) + ((int)(timer->Start()/100)) * 3600 + ((int)(timer->Start()%100)) * 60;
-  int tstop = timer->Day() - ( timer->Day() % 3600 ) + ((int)(timer->Stop()/100)) * 3600 + ((int)(timer->Stop()%100)) * 60;
-
-  //if a timer starts before and ends after midnight, add a day to tstop
-  if ( (int)(timer->Start()) > (int)(timer->Stop()) )
-    tstop += 86400;
-
-  serTimer.StartTimeStamp = StringExtension::UTF8Decode(StringExtension::dateToString((time_t)tstart));
-  serTimer.StopTimeStamp = StringExtension::UTF8Decode(StringExtension::dateToString((time_t)tstop));
+  serTimer.StartTimeStamp = v.GetStartStopTimestamp(timer);
+  serTimer.StopTimeStamp = v.GetStartStopTimestamp(timer, true);
 
   serTimers.push_back(serTimer);
 }
@@ -363,22 +460,20 @@ void XmlTimerList::init()
   s->write("<timers xmlns=\"http://www.domain.org/restfulapi/2011/timers-xml\">\n");
 }
 
-void XmlTimerList::addTimer(cTimer* timer)
+void XmlTimerList::addTimer(const cTimer* timer)
 {
   if ( filtered() ) return;
   static TimerValues v;
 
   s->write(" <timer>\n");
   s->write(cString::sprintf("  <param name=\"id\">%s</param>\n", StringExtension::encodeToXml(VdrExtension::getTimerID(timer)).c_str()));
+  s->write(cString::sprintf("  <param name=\"index\">%i</param>\n", timer->Index() + 1));
   s->write(cString::sprintf("  <param name=\"flags\">%i</param>\n", timer->Flags()));
   s->write(cString::sprintf("  <param name=\"start\">%i</param>\n", timer->Start()) );
   s->write(cString::sprintf("  <param name=\"stop\">%i</param>\n", timer->Stop()) );
 
-  int tstart = timer->Day() - ( timer->Day() % 3600 ) + ((int)(timer->Start()/100)) * 3600 + ((int)(timer->Start()%100)) * 60;
-  int tstop = timer->Day() - ( timer->Day() % 3600 ) + ((int)(timer->Stop()/100)) * 3600 + ((int)(timer->Stop()%100)) * 60;
-
-  s->write(cString::sprintf("  <param name=\"start_timestamp\">%s</param>\n", StringExtension::encodeToXml(StringExtension::dateToString(tstart)).c_str()));
-  s->write(cString::sprintf("  <param name=\"stop_timestamp\">%s</param>\n", StringExtension::encodeToXml(StringExtension::dateToString(tstop)).c_str()));
+  s->write(cString::sprintf("  <param name=\"start_timestamp\">%s</param>\n", StringExtension::encodeToXml(v.GetStartStopTimestamp(timer)).c_str()));
+  s->write(cString::sprintf("  <param name=\"stop_timestamp\">%s</param>\n", StringExtension::encodeToXml(v.GetStartStopTimestamp(timer, true)).c_str()));
 
   s->write(cString::sprintf("  <param name=\"priority\">%i</param>\n", timer->Priority()) );
   s->write(cString::sprintf("  <param name=\"lifetime\">%i</param>\n", timer->Lifetime()) );
@@ -391,7 +486,7 @@ void XmlTimerList::addTimer(cTimer* timer)
   s->write(cString::sprintf("  <param name=\"file_name\">%s</param>\n", StringExtension::encodeToXml(timer->File()).c_str()) );
   s->write(cString::sprintf("  <param name=\"channel_name\">%s</param>\n", StringExtension::encodeToXml(timer->Channel()->Name()).c_str()));
   s->write(cString::sprintf("  <param name=\"is_active\">%s</param>\n", (timer->Flags() & tfActive) == tfActive ? "true" : "false" ));
-  s->write(cString::sprintf("  <param name=\"aux\">%s</param>\n", StringExtension::encodeToXml(timer->Aux() != NULL ? timer->Aux() : "").c_str()));
+  s->write(cString::sprintf("  <param name=\"aux\">%s</param>\n", (timer->Aux() != NULL ? StringExtension::encodeToXml(timer->Aux()).c_str() : "")));
   s->write(" </timer>\n");
 }
 
@@ -399,6 +494,79 @@ void XmlTimerList::finish()
 {
   s->write((const char*)cString::sprintf(" <count>%i</count><total>%i</total>", Count(), total));
   s->write("</timers>");
+}
+
+// Timerdeleted list
+
+void operator<<= (cxxtools::SerializationInfo& si, const SerBulkDeleted& t)
+{
+  si.addMember("id") <<= t.id;
+  si.addMember("deleted") <<= t.deleted;
+}
+
+TimerDeletedList::TimerDeletedList(ostream *out)
+{
+  s = new StreamExtension(out);
+}
+
+TimerDeletedList::~TimerDeletedList()
+{
+  delete s;
+}
+
+void HtmlTimerDeletedList::init()
+{
+  s->writeHtmlHeader("HtmlTimerDeletedList");
+  s->write("<ul>");
+}
+
+void HtmlTimerDeletedList::addDeleted(SerBulkDeleted &timer)
+{
+  s->write(cString::sprintf("<li>%s deleted: %s</li>\n", StringExtension::toString(timer.id).c_str(), timer.deleted ? "true" : "false"));
+}
+
+void HtmlTimerDeletedList::finish()
+{
+  s->write("</ul>");
+  s->write("</body></html>");
+}
+
+void JsonTimerDeletedList::addDeleted(SerBulkDeleted &timer)
+{
+  serDeleted.push_back(timer);
+}
+
+void JsonTimerDeletedList::finish()
+{
+  cxxtools::JsonSerializer serializer(*s->getBasicStream());
+  serializer.serialize(serDeleted, "timers");
+  serializer.serialize(serDeleted.size(), "count");
+  serializer.serialize(total, "total");
+  serializer.finish();
+}
+
+void XmlTimerDeletedList::init()
+{
+  counter = 0;
+  s->writeXmlHeader();
+  s->write("<timers_deleted xmlns=\"http://www.domain.org/restfulapi/2011/timers-xml\">\n");
+}
+
+void XmlTimerDeletedList::addDeleted(SerBulkDeleted &timer)
+{
+  if ( filtered() ) return;
+  static TimerValues v;
+
+  s->write(" <timer>\n");
+  s->write(cString::sprintf("<id>%s</id>\n", StringExtension::toString(timer.id).c_str()));
+  s->write(cString::sprintf("<deleted>%s</deleted>\n", timer.deleted ? "true" : "false"));
+  s->write(" </timer>\n");
+}
+
+void XmlTimerDeletedList::finish()
+{
+  s->write((const char*)cString::sprintf(" <count>%i</count><total>%i</total>", Count(), total));
+  s->write("</timers_deleted>");
 }
 
 // --- TimerValues class ------------------------------------------------------------
@@ -491,8 +659,13 @@ cEvent* TimerValues::ConvertEvent(string event_id, cChannel* channel)
   int eventid = StringExtension::strtoi(event_id);
   if ( eventid <= -1 ) return NULL;
 
-  cSchedulesLock MutexLock;
-  const cSchedules *Schedules = cSchedules::Schedules(MutexLock);
+#if APIVERSNUM > 20300
+	LOCK_SCHEDULES_READ;
+#else
+	cSchedulesLock MutexLock;
+	const cSchedules *Schedules = cSchedules::Schedules(MutexLock);
+#endif
+
   if ( !Schedules ) return NULL;
 
   const cSchedule *Schedule = Schedules->GetSchedule(channel->GetChannelID());
@@ -564,14 +737,14 @@ string TimerValues::ConvertDay(string v)
   return res.str();
 }
 
-cChannel* TimerValues::ConvertChannel(string v)
+const cChannel* TimerValues::ConvertChannel(string v)
 {
   return VdrExtension::getChannel(v);
 }
 
 cTimer* TimerValues::ConvertTimer(string v)
 {
-  return VdrExtension::getTimer(v);
+  return VdrExtension::getTimerWrite(v);
 }
 
 string TimerValues::ConvertWeekdays(int v)
@@ -613,3 +786,21 @@ int TimerValues::ConvertWeekdays(string v)
   if ( str[6] == 'S' ) res += 1;
   return res;
 }
+
+string TimerValues::GetStartStopTimestamp(const cTimer* timer, bool stopTime) {
+
+	char buffer[80];
+	time_t t = timer->Day();
+	struct tm *tmTimer = localtime(&t);
+
+	tmTimer->tm_isdst	 = -1;
+	tmTimer->tm_hour	 = ( stopTime  ? timer->Stop() : timer->Start() ) / 100;
+	tmTimer->tm_min		 = ( stopTime  ? timer->Stop() : timer->Start() ) % 100;
+	tmTimer->tm_mday	+= ( stopTime && timer->Stop() < timer->Start() ) ? 1 : 0;
+
+	t = mktime(tmTimer);
+	tmTimer = localtime(&t);
+	strftime (buffer,80,"%Y-%m-%d %H:%M:%S",tmTimer);
+
+	return (string)buffer;
+};

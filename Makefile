@@ -9,6 +9,8 @@
 
 PLUGIN = restfulapi
 
+USE_LIBMAGICKPLUSPLUS ?= 1
+
 ### The version number of this plugin (taken from the main source file):
 
 VERSION = $(shell grep 'static const char \*VERSION *=' $(PLUGIN).cpp | awk '{ print $$6 }' | sed -e 's/[";]//g')
@@ -53,9 +55,15 @@ LIBS    += $(shell cxxtools-config --libs) -lcxxtools-http
 CONFDIR  = $(call PKGCFG,configdir)
 PLGCONFDIR = $(CONFDIR)/plugins/$(PLUGIN)
 
+ifeq ($(USE_LIBMAGICKPLUSPLUS), 1)
+INCLUDES += $(shell pkg-config --cflags Magick++)
+LIBS += $(shell pkg-config --libs Magick++)
+CXXFLAGS += -DUSE_LIBMAGICKPLUSPLUS
+endif
+
 ### The object files (add further files here):
 
-OBJS = $(PLUGIN).o serverthread.o tools.o info.o channels.o events.o recordings.o remote.o timers.o scraper2vdr.o statusmonitor.o osd.o jsonparser.o epgsearch.o searchtimers.o wirbelscan.o webapp.o femon.o
+OBJS = $(PLUGIN).o serverthread.o tools.o info.o searchtimers.o channels.o events.o recordings.o remote.o timers.o scraper2vdr.o statusmonitor.o osd.o jsonparser.o epgsearch.o wirbelscan.o webapp.o femon.o
 CFGS = API.html
 
 ### The main target:
@@ -126,4 +134,7 @@ dist: $(I18Npo) clean
 
 clean:
 	@-rm -f $(PODIR)/*.mo $(PODIR)/*.pot
-	@-rm -f $(OBJS) $(DEPFILE) *.so *.tgz core* *~
+	@-rm -f $(OBJS) $(DEPFILE) *.so *.tgz core* *~ ._*
+	
+archive:
+	git archive --format=tar.gz --prefix=vdr-plugin-restfulapi-${VERSION}/ --output=../vdr-plugin-restfulapi-${VERSION}.tar.gz master
