@@ -3,11 +3,18 @@
 #include <cxxtools/http/responder.h>
 #include <locale.h>
 #include <time.h>
+#ifdef USE_LIBMAGICKPLUSPLUS
+#include <Magick++.h>
+#endif
 #include "scraper2vdr/services.h"
 #include "tools.h"
 
 #ifndef SCRAPER2VDRESTFULAPI_H
 #define SCRAPER2VDRESTFULAPI_H
+
+#ifdef USE_LIBMAGICKPLUSPLUS
+using namespace Magick;
+#endif
 
 struct SerActor
 {
@@ -78,24 +85,33 @@ private:
   cPlugin *getScraperPlugin(void);
   cPlugin *scraper;
   std::string epgImagesDir;
-  bool getEventType	(ScraperGetEventType &eventType);
-  void getSeriesMedia	(SerAdditionalMedia &am, ScraperGetEventType &eventType);
-  void getMovieMedia	(SerAdditionalMedia &am, ScraperGetEventType &eventType);
-  void getSeriesMedia	(StreamExtension* s, ScraperGetEventType &eventType);
-  void getMovieMedia	(StreamExtension* s, ScraperGetEventType &eventType);
-  bool getMedia		(ScraperGetEventType &eventType, SerAdditionalMedia &am);
-  bool getMedia		(ScraperGetEventType &eventType, StreamExtension* s);
+  bool getEventType		(ScraperGetEventType &eventType);
+  void getSeriesMedia		(SerAdditionalMedia &am, ScraperGetEventType &eventType);
+  void getMovieMedia		(SerAdditionalMedia &am, ScraperGetEventType &eventType);
+  void getSeriesMedia		(StreamExtension* s, ScraperGetEventType &eventType);
+  void getMovieMedia		(StreamExtension* s, ScraperGetEventType &eventType);
+  std::string getSeriesMedia	(ScraperGetEventType &eventType);
+  std::string getMovieMedia	(ScraperGetEventType &eventType);
+  bool getMedia			(ScraperGetEventType &eventType, SerAdditionalMedia &am);
+  bool getMedia			(ScraperGetEventType &eventType, StreamExtension* s);
+  std::string getMedia		(ScraperGetEventType &eventType);
   std::string cleanImagePath(std::string path);
 public:
   explicit Scraper2VdrService();
   virtual ~Scraper2VdrService();
-  bool getMedia(cEvent *event, SerAdditionalMedia &am);
-  bool getMedia(cRecording *recording, SerAdditionalMedia &am);
-  bool getMedia(cEvent *event, StreamExtension *s);
-  bool getMedia(cRecording *recording, StreamExtension* s);
+  bool getMedia(const cEvent *event, SerAdditionalMedia &am);
+  bool getMedia(const cRecording *recording, SerAdditionalMedia &am);
+  bool getMedia(const cEvent *event, StreamExtension *s);
+  std::string getMedia(const cRecording *recording);
 };
 
 class ScraperImageResponder : public cxxtools::http::Responder {
+private:
+#ifdef USE_LIBMAGICKPLUSPLUS
+  std::string parseResize(std::string url, int& width, int& height, bool& aspect);
+  bool resizeImage(std::string source, std::string target, int& width, int& height, bool& aspect);
+#endif
+  bool hasPath(std::string targetPath);
 public:
   explicit ScraperImageResponder(cxxtools::http::Service& service) : cxxtools::http::Responder(service) {}
   virtual void reply(std::ostream& out, cxxtools::http::Request& request, cxxtools::http::Reply& reply);

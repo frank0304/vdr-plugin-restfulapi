@@ -63,13 +63,67 @@ bool Settings::SetChannelLogoDirectory(std::string v)
 
 bool Settings::SetWebappDirectory(std::string v)
 {
+  string app_name;
+  string path;
+
+  if (v.find(",")) {
+
+    vector<string> paths = StringExtension::split(v, ",");
+    vector<string>::iterator it = paths.begin();
+    vector<string> path_parts;
+
+    int index = 0;
+    for(; it != paths.end(); ++it) {
+
+		path = paths[index];
+		addWebapp(path);
+		index++;
+    }
+  } else {
+	addWebapp(v);
+  }
+  return true;
+}
+
+void Settings::addWebapp(string path) {
+
+  struct stat stat_info;
+  string app_name;
+
+  if (path[path.length()-1] == '/')
+    path = path.substr(0, path.length()-1);
+  app_name = path.substr(path.find_last_of("/") + 1, path.length());
+
+  if ( stat(path.c_str(), &stat_info) == 0) {
+     webapps[app_name] = path;
+     webapp_dir += webapp_dir == "" ? path : ", " + path;
+     esyslog("restfulapi: Webapp '%s' configured for path '%s'!", app_name.c_str(), path.c_str());
+  } else {
+     esyslog("restfulapi: can not add webapp '%s'! Path '%s' does not exist!", app_name.c_str(), path.c_str());
+  }
+};
+
+bool Settings::SetCacheDir(std::string v) {
   struct stat stat_info;
   if ( stat(v.c_str(), &stat_info) == 0) {
      if (v[v.length()-1] == '/')
-        webapp_dir = v.substr(0, v.length()-1);
+        cache_dir = v.substr(0, v.length()-1);
      else
-        webapp_dir = v;
-     esyslog("restfulapi: The Webapp will be loaded from %s!", webapp_dir.c_str());
+        cache_dir = v;
+     esyslog("restfulapi: The cached files will be loaded from %s!", cache_dir.c_str());
+     return true;
+  }
+  return false;
+}
+
+bool Settings::SetConfDir(std::string v) {
+  struct stat stat_info;
+  if ( stat(v.c_str(), &stat_info) == 0) {
+     if (v[v.length()-1] == '/')
+        conf_dir = v.substr(0, v.length()-1);
+     else
+        conf_dir = v;
+     esyslog("restfulapi: The config dir is %s!", cache_dir.c_str());
      return true;
   }
   return false;
@@ -85,6 +139,69 @@ bool Settings::SetHeaders(std::string v)
   return true;
 }
 
+bool Settings::InitWebappFileTypes() {
+
+  webapp_file_types["html"]		= "text/html";
+  webapp_file_types["js"]		= "application/javascript";
+  webapp_file_types["css"]		= "text/css";
+  webapp_file_types["gif"]		= "image/gif";
+  webapp_file_types["png"]		= "image/png";
+  webapp_file_types["jpg"]		= "image/jpeg";
+  webapp_file_types["jpeg"]		= webapp_file_types["jpg"];
+  webapp_file_types["jpe"]		= webapp_file_types["jpg"];
+  webapp_file_types["svg"]		= "image/svg+xml";
+  webapp_file_types["ico"]		= "image/vnd.microsoft.icon";
+  webapp_file_types["xml"]		= "application/xml";
+  webapp_file_types["appcache"]		= "text/cache-manifest";
+  webapp_file_types["manifest"]		= webapp_file_types["appcache"];
+  webapp_file_types["mkv"]		= "video/mkv";
+  webapp_file_types["map"]		= "application/json";
+  webapp_file_types["txt"]		= "text/plain";
+
+  string fileTypesPath = ConfDirectory() + "/" + webapp_filetypes_filename;
+  if ( !FileExtension::get()->exists(fileTypesPath)) {
+
+      FILE * fp;
+      fp = fopen(fileTypesPath.c_str(), "w");
+      map<string, string>::iterator it;
+
+      esyslog("restfulapi: Webapp file types config file %s missing... Creating it with defaults.", fileTypesPath.c_str());
+
+      if ( fp != NULL ) {
+	for (it = webapp_file_types.begin(); it != webapp_file_types.end(); it++) {
+
+	    fputs((it->first + "=" + it->second + "\n").c_str(), fp);
+	}
+	fclose(fp);
+      } else {
+	  esyslog("restfulapi: could not open %s for writing: %s", fileTypesPath.c_str(), strerror(errno));
+      }
+  } else {
+      esyslog("restfulapi: Webapp file types config file %s found.", fileTypesPath.c_str());
+      webapp_file_types.clear();
+  }
+
+  return true;
+};
+
+bool Settings::AddWebappFileType(string ext, string type) {
+
+  webapp_file_types[ext] = type;
+  return true;
+};
+
+map<std::string, std::string> Settings::WebappFileTypes() {
+
+  return webapp_file_types;
+};
+
+std::string Settings::WebappDirectory() {
+
+	string glue = ",";
+
+	return StringExtension::join(webapps, glue);
+}
+
 Settings* Settings::get() 
 {
   static Settings settings;
@@ -97,8 +214,9 @@ void Settings::initDefault()
   SetIp((string)"0.0.0.0");
   SetEpgImageDirectory((string)"/var/cache/vdr/epgimages");
   SetChannelLogoDirectory((string)"/usr/share/vdr/channel-logos");
-  SetWebappDirectory((string)"/var/lib/vdr/restfulapi/webapp");
+  SetWebappDirectory((string)"/var/lib/vdr/plugins/restfulapi/webapp");
   SetHeaders((string)"true");
+  webapp_filetypes_filename = "webapp_file_types.conf";
 }
 
 // --- HtmlHeader --------------------------------------------------------------
@@ -225,26 +343,31 @@ FileNotifier::~FileNotifier()
 void FileNotifier::Initialize(int mode)
 {
   _mode = mode;
-  string dir;
+  string watch;
 
   if ( _mode == FileNotifier::EVENTS) {
-     dir = Settings::get()->EpgImageDirectory().c_str();
-  } else {
-     dir = Settings::get()->ChannelLogoDirectory().c_str();
+      watch = Settings::get()->EpgImageDirectory().c_str();
+  } else if ( _mode == FileNotifier::CHANNELS) {
+      watch = Settings::get()->ChannelLogoDirectory().c_str();
+  } else if ( _mode == FileNotifier::WEBAPPFILETYPES ) {
+      watch = Settings::get()->ConfDirectory().c_str();
   }
+  esyslog("restfulapi: Initializing inotify for %s", watch.c_str());
   
   _filedescriptor = inotify_init();
   _wd = -1;
 
-  if ( dir.length() == 0 ) {
+  if ( watch.length() == 0 ) {
      esyslog("restfulapi: Initializing inotify for epgimages or channellogos failed! (Check restfulapi-settings!)");
-     _wd = -1;
   } else {
-     _wd = inotify_add_watch( _filedescriptor, dir.c_str(), IN_CREATE | IN_DELETE );
-     if ( _wd < 0 )
-        esyslog("restfulapi: Initializing inotify for epgimages failed!");
-     else
-        esyslog("restfulapi: Initializing inotify for %s finished.", dir.c_str());
+
+      if ( watch.length() > 0 ) {
+	_wd = inotify_add_watch( _filedescriptor, watch.c_str(), IN_CREATE | IN_DELETE | IN_MODIFY);
+	if ( _wd < 0 )
+	  esyslog("restfulapi: Initializing inotify for %s failed!", watch.c_str());
+	else
+	  esyslog("restfulapi: Initializing inotify for %s finished.", watch.c_str());
+      }
   }
  
 
@@ -261,33 +384,43 @@ void FileNotifier::Action(void)
   char buffer[BUF_LEN];
 
   while(active) {
-    i = 0;
     struct pollfd pfd[1];
     pfd[0].fd = _filedescriptor;
     pfd[0].events = POLLIN;
     
     if ( poll(pfd, 1, 500) > 0 ) {
+
        length = read( _filedescriptor, buffer, BUF_LEN );
+       i = 0;
     
        if ( length > 0 ) {
           while ( i < length ) {
              struct inotify_event *event = ( struct inotify_event * ) &buffer[ i ];
+
              if ( event->len > 0 && !(event->mask & IN_ISDIR) ) {
  
                 if (event->mask & IN_CREATE) {
                    //esyslog("restfulapi: inotify: found new image: %s", event->name);
                    if ( _mode == FileNotifier::EVENTS )
                       FileCaches::get()->addEventImage((std::string)event->name);
-                   else
+                   else if ( _mode == FileNotifier::CHANNELS )
                       FileCaches::get()->addChannelLogo((std::string)event->name);
+                   else if ( _mode == FileNotifier::WEBAPPFILETYPES && event->name == Settings::get()->WebAppFileTypesFilename())
+                     FileCaches::get()->cacheWebappFileTypes();
                 }
              
                 if (event->mask & IN_DELETE)  {
                    //esyslog("restfulapi: inotify: image %s has been removed", event->name);
                    if ( _mode == FileNotifier::EVENTS )
                       FileCaches::get()->removeEventImage((std::string)event->name);
-                   else
+                   else if ( _mode == FileNotifier::CHANNELS )
                       FileCaches::get()->removeChannelLogo((std::string)event->name);
+                }
+
+                if (event->mask & IN_MODIFY)  {
+                   //esyslog("restfulapi: inotify: file %s has been modified", event->name);
+                   if ( _mode == FileNotifier::WEBAPPFILETYPES  && event->name == Settings::get()->WebAppFileTypesFilename() )
+                     FileCaches::get()->cacheWebappFileTypes();
                 }
              }
              i += EVENT_SIZE + event->len;
@@ -330,6 +463,45 @@ void FileCaches::cacheChannelLogos()
   VdrExtension::scanForFiles(folderWildcard, channelLogos);
 }
 
+void FileCaches::cacheWebappFileTypes() {
+
+  FILE * typesFile;
+  string typesFileName = Settings::get()->ConfDirectory() + "/" + Settings::get()->WebAppFileTypesFilename();
+  char filetype[100];
+  string line;
+  Settings* settings = Settings::get();
+
+  settings->InitWebappFileTypes();
+
+  if (FileExtension::get()->exists(typesFileName)) {
+
+      typesFile = fopen(typesFileName.c_str(), "r");
+
+      if (typesFile != NULL) {
+	while (fgets(filetype, 100, typesFile)) {
+
+	    if ( ((string)filetype).find("#") != string::npos ) {
+
+		line = ((string)filetype).substr(0, ((string)filetype).find_first_of("#"));
+	    } else {
+
+		line = (string)filetype;
+	    }
+
+	    if (line.find("=") != string::npos) {
+
+		    settings->AddWebappFileType(
+			StringExtension::trim(line.substr(0, line.find_first_of("="))),
+			StringExtension::trim(line.substr(line.find_first_of("=") + 1))
+		    );
+	    }
+	}
+	fclose(typesFile);
+      }
+  }
+
+}
+
 void FileCaches::searchEventImages(int eventid, std::vector< std::string >& files)
 {
   cxxtools::Regex regex( (string)"^" + StringExtension::itostr(eventid) + (string)"(_[0-9]+)?.[a-z]{3,4}$" );
@@ -340,7 +512,7 @@ void FileCaches::searchEventImages(int eventid, std::vector< std::string >& file
   }
 }
 
-std::string FileCaches::searchChannelLogo(cChannel *channel)
+std::string FileCaches::searchChannelLogo(const cChannel *channel)
 {
   std::string cid = (std::string)(*channel->GetChannelID().ToString());
   std::string cname = (std::string)channel->Name();
@@ -443,7 +615,7 @@ void FileExtension::addModifiedHeader(string path, cxxtools::http::Reply& reply)
   setlocale(LC_TIME,"POSIX");
   strftime(buffer,30,"%a, %d %b %Y %H:%M:%S %Z",tm);
   setlocale(LC_TIME,getLocale());
-  esyslog("restfulapi: FileExtension: adding last-modified-header %s to file %s", buffer, path.c_str());
+  dsyslog("restfulapi: FileExtension: adding last-modified-header %s to file %s", buffer, path.c_str());
   reply.addHeader("Last-Modified", buffer);
 };
 
@@ -474,11 +646,11 @@ bool FileExtension::exists(string path) {
   const char* cPath = path.c_str();
   char* rPath = realpath(cPath, nptr);
 
-  esyslog("restfulapi: FileExtension: requested path %s", cPath);
-  esyslog("restfulapi: FileExtension: realpath %s", rPath);
+  dsyslog("restfulapi: FileExtension: requested path %s", cPath);
+  dsyslog("restfulapi: FileExtension: realpath %s", rPath);
 
   if (!rPath || (rPath && strcmp(cPath, rPath) != 0)) {
-      esyslog("restfulapi: realpath does not match requested path");
+      dsyslog("restfulapi: realpath does not match requested path");
       return false;
   }
   FILE *fp = fopen(path.c_str(),"r");
@@ -486,52 +658,73 @@ bool FileExtension::exists(string path) {
     fclose(fp);
     return true;
   }
-  esyslog("restfulapi: FileExtension: requested file %s does not exists", cPath);
+  dsyslog("restfulapi: FileExtension: requested file %s does not exists", cPath);
 
   return false;
 };
 
 // --- VdrExtension -----------------------------------------------------------
 
-cChannel* VdrExtension::getChannel(int number)
+const cChannel* VdrExtension::getChannel(int number)
 {
-  if( number == -1 || number >= Channels.Count() ) { return NULL; }
 
-  cChannel* result = NULL;
-  int counter = 1;
-  for (cChannel *channel = Channels.First(); channel; channel = Channels.Next(channel))
-  {
-      if (!channel->GroupSep()) {
-         if (counter == number)
-         {
-            result = channel;
-            break;
-         }
-         counter++;
-      }
-  }
-  return result;
+#if APIVERSNUM > 20300
+    LOCK_CHANNELS_READ;
+    const cChannels& channels = *Channels;
+#else
+    cChannels& channels = Channels;
+#endif
+
+	if( number == -1 || number >= channels.Count() ) { return NULL; }
+
+	const cChannel* result = NULL;
+	int counter = 1;
+	for (const cChannel *channel = channels.First(); channel; channel = channels.Next(channel)) {
+
+		if (!channel->GroupSep()) {
+			if (counter == number) {
+				result = channel;
+				break;
+			}
+			counter++;
+		}
+	}
+	return result;
 }
 
-cChannel* VdrExtension::getChannel(string id)
-{
-  if ( id.length() == 0 ) return NULL;
- 
-  for (cChannel* channel = Channels.First(); channel; channel= Channels.Next(channel))
-  {
-      if ( id == (string)channel->GetChannelID().ToString() ) {
-         return channel;
-      }
-  }
-  return NULL;
+const cChannel* VdrExtension::getChannel(string id) {
+
+#if APIVERSNUM > 20300
+    LOCK_CHANNELS_READ;
+    const cChannels& channels = *Channels;
+#else
+    cChannels& channels = Channels;
+#endif
+
+	if ( id.length() == 0 ) return NULL;
+
+	for (const cChannel* channel = channels.First(); channel; channel= channels.Next(channel)) {
+		if ( id == (string)channel->GetChannelID().ToString() ) {
+			return channel;
+		}
+	}
+	return NULL;
 }
 
-cTimer* VdrExtension::getTimer(string id)
+const cTimer* VdrExtension::getTimer(string id)
 {
-  cTimer* timer;
-  int tc = Timers.Count();
+
+#if APIVERSNUM > 20300
+    LOCK_TIMERS_READ;
+    const cTimers& timers = *Timers;
+#else
+    cTimers& timers = Timers;
+#endif
+
+  const cTimer* timer;
+  int tc = timers.Count();
   for (int i=0;i<tc;i++) {
-      timer = Timers.Get(i);
+      timer = timers.Get(i);
       if ( VdrExtension::getTimerID(timer) == id ) {
          return timer;
       }  
@@ -539,7 +732,28 @@ cTimer* VdrExtension::getTimer(string id)
   return NULL;
 }
 
-string VdrExtension::getTimerID(cTimer* timer)
+cTimer* VdrExtension::getTimerWrite(string id)
+{
+
+#if APIVERSNUM > 20300
+    LOCK_TIMERS_WRITE;
+    cTimers& timers = *Timers;
+#else
+    cTimers& timers = Timers;
+#endif
+
+  cTimer* timer;
+  int tc = timers.Count();
+  for (int i=0;i<tc;i++) {
+      timer = timers.Get(i);
+      if ( VdrExtension::getTimerID(timer) == id ) {
+         return timer;
+      }
+  }
+  return NULL;
+}
+
+string VdrExtension::getTimerID(const cTimer* timer)
 {
   ostringstream str;
   str << (const char*)timer->Channel()->GetChannelID().ToString() << ":" << timer->WeekDays() << ":"
@@ -584,7 +798,7 @@ bool VdrExtension::doesFileExistInFolder(string wildcardpath, string filename)
   return false;
 }
 
-bool VdrExtension::IsRadio(cChannel* channel)
+bool VdrExtension::IsRadio(const cChannel* channel)
 {
   if ((channel->Vpid() == 0 && channel->Apid(0) != 0) || channel->Vpid() == 1 ) {
      return true;
@@ -592,12 +806,20 @@ bool VdrExtension::IsRadio(cChannel* channel)
   return false;
 }
 
-bool VdrExtension::IsRecording(cRecording* recording)
+bool VdrExtension::IsRecording(const cRecording* recording)
 {
-  cTimer* timer = NULL;
-  for (int i=0;i<Timers.Count();i++)
+
+#if APIVERSNUM > 20300
+    LOCK_TIMERS_READ;
+    const cTimers& timers = *Timers;
+#else
+    cTimers& timers = Timers;
+#endif
+
+  const cTimer* timer = NULL;
+  for (int i=0;i<timers.Count();i++)
   {
-     timer = Timers.Get(i);
+     timer = timers.Get(i);
      if (string(timer->File()).compare(recording->Name())) {
         return true;
      }
@@ -605,10 +827,18 @@ bool VdrExtension::IsRecording(cRecording* recording)
   return false;
 }
 
-cTimer* VdrExtension::TimerExists(cEvent* event)
+const cTimer* VdrExtension::TimerExists(const cEvent* event)
 {
-  for(int i=0;i<Timers.Count();i++) {
-     cTimer* timer = Timers.Get(i);
+
+#if APIVERSNUM > 20300
+    LOCK_TIMERS_READ;
+    const cTimers& timers = *Timers;
+#else
+    cTimers& timers = Timers;
+#endif
+
+  for(int i=0;i<timers.Count();i++) {
+     const cTimer* timer = timers.Get(i);
 
      if ( timer->Event() != NULL &&  timer->Event()->EventID() == event->EventID() && strcmp(timer->Event()->ChannelID().ToString(), event->ChannelID().ToString()) == 0 ) {
         return timer;
@@ -632,34 +862,42 @@ cTimer* VdrExtension::TimerExists(cEvent* event)
   return NULL;
 }
 
-vector< cTimer* > VdrExtension::SortedTimers()
+vector< const cTimer* > VdrExtension::SortedTimers()
 {
-  vector< cTimer* > timers;
-  for(int i=0;i<Timers.Count();i++)
+
+#if APIVERSNUM > 20300
+    LOCK_TIMERS_READ;
+    const cTimers& timers = *Timers;
+#else
+    cTimers& timers = Timers;
+#endif
+
+  vector< const cTimer* > returnTimers;
+  for(int i=0;i<timers.Count();i++)
   {
-     timers.push_back(Timers.Get(i));
+	  returnTimers.push_back(timers.Get(i));
   }
 
-  for(int i=0;i<(int)timers.size() - 1;i++)
+  for(int i=0;i<(int)returnTimers.size() - 1;i++)
   {
      bool changed = false;
-     for(int k=0;k<(int)timers.size() - i - 1;k++)
+     for(int k=0;k<(int)returnTimers.size() - i - 1;k++)
      {
-         if (VdrExtension::CompareTimers(timers[k], timers[k+1])) 
+         if (VdrExtension::CompareTimers(returnTimers[k], returnTimers[k+1]))
          {
-            cTimer* swap = timers[k];
-            timers[k] = timers[k+1];
-            timers[k+1] = swap;
+            const cTimer* swap = returnTimers[k];
+            returnTimers[k] = returnTimers[k+1];
+            returnTimers[k+1] = swap;
             changed = true;
          }
      }
      if(!changed) break;
   }
 
-  return timers;
+  return returnTimers;
 }
 
-bool VdrExtension::CompareTimers(cTimer* timer1, cTimer* timer2)
+bool VdrExtension::CompareTimers(const cTimer* timer1, const cTimer* timer2)
 {
   int day1 = (int)timer1->Day() - ((int)timer1->Day() % 3600);
   int day2 = (int)timer2->Day() - ((int)timer2->Day() % 3600);
@@ -683,34 +921,54 @@ bool VdrExtension::CompareTimers(cTimer* timer1, cTimer* timer2)
   return false;
 }
 
-int VdrExtension::RecordingLengthInSeconds(cRecording* recording)
+int VdrExtension::RecordingLengthInSeconds(const cRecording* recording)
 {
   int nf = recording->NumFrames();
   if (nf >= 0)
-#if APIVERSNUM >= 10703
      return int(((double)nf / recording->FramesPerSecond()));
-#else
-     return int((double)nf / FRAMESPERSEC);
-#endif
   return -1;
 }
 
-const cEvent* VdrExtension::GetEventById(tEventID eventID, cChannel* channel)
+const cEvent* VdrExtension::GetEventById(tEventID eventID, const cChannel* channel)
 {
-  cSchedulesLock MutexLock;
-  const cSchedules *Schedules = cSchedules::Schedules(MutexLock);
 
-  if (!Schedules)
-     return NULL;
+#if APIVERSNUM > 20300
+	LOCK_SCHEDULES_READ;
+#else
+	cSchedulesLock MutexLock;
+	const cSchedules *Schedules = cSchedules::Schedules(MutexLock);
+#endif
 
-  const cSchedule *Schedule = Schedules->GetSchedule(channel->GetChannelID());
-  if (Schedule)
-     return Schedule->GetEvent(eventID);
+	if (!Schedules)
+		return NULL;
 
-  return NULL;
+	const cSchedule *Schedule = Schedules->GetSchedule(channel->GetChannelID());
+	if (Schedule)
+		return Schedule->GetEvent(eventID);
+
+	return NULL;
 }
 
-string VdrExtension::getRelativeVideoPath(cRecording* recording)
+cEvent* VdrExtension::getCurrentEventOnChannel(const cChannel* channel)
+{
+  if ( channel == NULL ) return NULL; 
+
+#if APIVERSNUM > 20300
+	LOCK_SCHEDULES_READ;
+#else
+  cSchedulesLock MutexLock;
+  const cSchedules *Schedules = cSchedules::Schedules(MutexLock);
+#endif
+
+  if ( ! Schedules ) { return NULL; }
+  const cSchedule *Schedule = Schedules->GetSchedule(channel->GetChannelID());
+  if ( !Schedule ) { return NULL; }
+
+  time_t now = time(NULL);
+  return (cEvent*)Schedule->GetEventAround(now);
+}
+
+string VdrExtension::getRelativeVideoPath(const cRecording* recording)
 {
   string path = (string)recording->FileName();
 #if APIVERSNUM > 20101
@@ -719,21 +977,6 @@ string VdrExtension::getRelativeVideoPath(cRecording* recording)
   string VIDEODIR(VideoDirectory);
 #endif
   return path.substr(VIDEODIR.length());
-}
-
-cEvent* VdrExtension::getCurrentEventOnChannel(cChannel* channel)
-{
-  if ( channel == NULL ) return NULL; 
-
-  cSchedulesLock MutexLock;
-  const cSchedules *Schedules = cSchedules::Schedules(MutexLock);
-
-  if ( ! Schedules ) { return NULL; }
-  const cSchedule *Schedule = Schedules->GetSchedule(channel->GetChannelID());
-  if ( !Schedule ) { return NULL; }
-
-  time_t now = time(NULL);
-  return (cEvent*)Schedule->GetEventAround(now);
 }
 
 string VdrExtension::getVideoDiskSpace()
@@ -955,12 +1198,26 @@ string VdrExtension::MoveRecording(cRecording const * recording, string const & 
      return "";
   }
 
+#if APIVERSNUM > 20300
+	  LOCK_RECORDINGS_WRITE;
+	  cRecordings& recordings = *Recordings;
+#else
+	  cRecordings& recordings = Recordings;
+#endif
   if (!copy)
-     Recordings.DelByName(oldname.c_str());
-  Recordings.AddByName(newname.c_str());
+	  recordings.DelByName(oldname.c_str());
+  recordings.AddByName(newname.c_str());
   cRecordingUserCommand::InvokeCommand(*cString::sprintf("rename \"%s\"", *strescape(oldname.c_str(), "\\\"$'")), newname.c_str());
   return newname;
 }
+
+cDvbDevice* VdrExtension::getDevice(int index) {
+
+  cDevice * d = cDevice::GetDevice(index);
+  cDvbDevice* dev = (cDvbDevice*)d;
+
+  return dev;
+};
 
 // --- VdrMarks ---------------------------------------------------------------
 
@@ -996,7 +1253,7 @@ bool VdrMarks::validateMark(string mark)
   return regex.match(mark);
 }
 
-string VdrMarks::getPath(cRecording* recording)
+string VdrMarks::getPath(const cRecording* recording)
 {
   string filename = recording->FileName();
   return filename + "/marks";
@@ -1012,7 +1269,7 @@ bool VdrMarks::parseLine(std::vector<string >& marks, string line)
   return false;
 }
 
-vector<string > VdrMarks::readMarks(cRecording* recording)
+vector<string > VdrMarks::readMarks(const cRecording* recording)
 {
   vector<string > marks;
   string path = getPath(recording);
@@ -1042,7 +1299,7 @@ vector<string > VdrMarks::readMarks(cRecording* recording)
   return marks;
 }
 
-bool VdrMarks::saveMarks(cRecording* recording, std::vector< std::string > marks)
+bool VdrMarks::saveMarks(const cRecording* recording, std::vector< std::string > marks)
 {
   if (recording == NULL) {
      return false;
@@ -1079,7 +1336,7 @@ bool VdrMarks::saveMarks(cRecording* recording, std::vector< std::string > marks
   return false;
 }
 
-bool VdrMarks::deleteMarks(cRecording* recording)
+bool VdrMarks::deleteMarks(const cRecording* recording)
 {
   string marksfile = getPath(recording);
 
@@ -1151,6 +1408,11 @@ string StringExtension::encodeToXml(const string &str)
     }
 }
 
+string StringExtension::encodeToXml(cxxtools::String &str) {
+
+  return encodeToXml(toString(str));
+};
+
 
 cxxtools::String StringExtension::encodeToJson(const string &str)
 {
@@ -1179,6 +1441,11 @@ cxxtools::String StringExtension::encodeToJson(const string &str)
   }
 }
 
+cxxtools::String StringExtension::encodeToJson(cxxtools::String &str) {
+
+  return encodeToJson(toString(str));
+};
+
 
 cxxtools::String StringExtension::UTF8Decode(string str)
 {
@@ -1204,8 +1471,8 @@ string StringExtension::toLowerCase(string str)
 
 string StringExtension::trim(string str)
 {
-  int a = str.find_first_not_of(" \t");
-  int b = str.find_last_not_of(" \t");
+  int a = str.find_first_not_of(" \n\t\r");
+  int b = str.find_last_not_of(" \n\t\r");
   if ( a == -1 ) a = 0;
   if ( b == -1 ) b = str.length() - 1;
   return str.substr(a, (b-a)+1);
@@ -1214,7 +1481,7 @@ string StringExtension::trim(string str)
 vector<string > StringExtension::split(string str, string s)
 {
   vector< string > result;
-  if ( str.length() <= 1 ) return result;
+  if ( str.length() < 1 ) return result;
 
   int found = 0;
   int previous = -1;
@@ -1226,6 +1493,34 @@ vector<string > StringExtension::split(string str, string s)
   result.push_back(str.substr(previous+1));
 
   return result;
+}
+
+string StringExtension::join(vector<string> in, string glue) {
+
+	string returnString = "";
+	string current;
+
+	for(std::vector<string>::iterator it = in.begin(); it != in.end(); ++it) {
+
+		current = *it;
+		returnString += returnString == "" ? current : glue + current;
+	}
+
+	return returnString;
+}
+
+string StringExtension::join(map<string, string> in, string glue, bool keys) {
+
+	string returnString = "";
+	string current;
+
+	for(map<string, string>::iterator it = in.begin(); it != in.end(); ++it) {
+
+		current = keys ? it->first : it->second;
+		returnString += returnString == "" ? current : glue + current;
+	}
+
+	return returnString;
 }
 
 string StringExtension::timeToString(time_t time)
@@ -1262,11 +1557,30 @@ string StringExtension::addZeros(int value, int digits)
   return strValue;
 }
 
+string StringExtension::toString(cxxtools::String value) {
+
+  std::ostringstream returnValue;
+  returnValue << value;
+
+  return returnValue.str();
+}
+
+string StringExtension::toString(cString value) {
+
+  const char* v = value;
+  string returnValue(v);
+
+  return returnValue;
+}
+
 // --- QueryHandler -----------------------------------------------------------
 
 QueryHandler::QueryHandler(string service, cxxtools::http::Request& request)
 {
   _url = request.url();
+
+  _url = fixUrl(_url);
+
   _service = service;
   _options.parse_url(request.qparams());
   string body = request.bodyStr();
@@ -1305,6 +1619,64 @@ QueryHandler::~QueryHandler()
      delete jsonObject;
   }
 }
+
+/**
+ * fix wrong decoded urls
+ */
+string QueryHandler::fixUrl(string url) {
+
+
+	/**
+	 * http://192.168.3.2:8002/recordings/path/to/%25%233Fx%233F_-_%233F._file/2015-11-10.04.30.1016-0.rec.json?marks=true
+	 *
+	 * defect: %25%23 is decoded to #0023, should be %#
+	 *
+
+		urlencoded chars	 		chars in url		replace with
+
+		#							#0023				%#
+		$							#0024				%$
+		%							#0025				%%
+		&							#0026				%&
+		+							#002B				%+
+		,							#002C				%,
+		/							#002F				%/
+		:							#003A				%:
+		;							#003B				%;
+		=							#003D				%=
+		?							#003F				%?
+		@							#0040				%@
+		[							#005B				%[
+		]							#005D				%]
+	 */
+
+	map<string, string> badChars;
+	badChars["2"] = "\x02";
+	badChars["3"] = "\x03";
+	badChars["4"] = "\x04";
+	badChars["5"] = "\x05";
+
+	string::size_type pos = 0;
+	string::size_type found;
+	string next;
+	string replace;
+	unsigned int x;
+	char m;
+
+	for (map<string, string>::iterator mt = badChars.begin(); mt != badChars.end(); ++mt) {
+		while ( ( pos = url.find(  mt->second, found ) ) != string::npos) {
+
+			next = url.substr(pos+1, 1);
+			replace = "%";
+			x = (int)strtol((mt->first+next).c_str(), NULL, 16);
+			m = x;
+			replace.push_back(m);
+			url = StringExtension::replace(url, mt->second+next, replace);
+		}
+	}
+	//esyslog("restfulapi: fixed url: %s", url.c_str());
+	return url;
+};
 
 void QueryHandler::parseRestParams(std::string params)
 {
@@ -1402,6 +1774,17 @@ string QueryHandler::getParamAsString(int level)
   return param;
 }
 
+string QueryHandler::getParamAsRecordingPath()
+{
+  int level = 0;
+  string path = "";
+  while ( level < (int)_params.size() ) {
+      path = path + "/" + getParamAsString(level);
+      level++;
+  }
+  return path;
+}
+
 string QueryHandler::getOptionAsString(string name)
 {
   return _options.param(name);
@@ -1459,9 +1842,18 @@ bool QueryHandler::getBodyAsBool(string name)
 JsonArray* QueryHandler::getBodyAsArray(string name)
 {
   if ( jsonObject == NULL ) {
-     return NULL;
+    if (_body.has(name + "[]")) {
+      JsonArray* jsonArray = new JsonArray();
+      int length=_body.paramcount(name + "[]");
+      for (int i=0;i<length;i++) {
+	  jsonArray->AddItem((JsonBase*)new JsonBasicValue(_body.param(name + "[]", i)));
+      }
+      return jsonArray;
+    }
+    return NULL;
   }
   JsonValue* jsonValue = jsonObject->GetItem(name);
+
   if ( jsonValue == NULL || jsonValue->Value() == NULL || !jsonValue->Value()->IsArray() ) {
      return NULL;
   }
@@ -1479,7 +1871,48 @@ void QueryHandler::addHeader(cxxtools::http::Reply& reply)
 {
   reply.addHeader("Access-Control-Allow-Origin", "*");
   reply.addHeader("Access-Control-Allow-Methods", "POST, GET, DELETE, PUT");
+  reply.addHeader("Access-Control-Allow-Headers", "accept, authorization");
 }
+
+vector< string > QueryHandler::getBodyAsStringArray(string name) {
+
+  vector< string > returnVector;
+
+  JsonArray *json = getBodyAsArray(name);
+  if (json != NULL) {
+    for (int i=0; i < json->CountItem(); i++) {
+	JsonBase* jsonBase = json->GetItem(i);
+	if (jsonBase->IsBasicValue()) {
+	  JsonBasicValue* jsonBasicValue = (JsonBasicValue*)jsonBase;
+	  if (jsonBasicValue->IsString()) {
+	    string value = jsonBasicValue->ValueAsString().c_str();
+	    returnVector.push_back(value);
+	  }
+	}
+    }
+  }
+  return returnVector;
+};
+
+vector< int > QueryHandler::getBodyAsIntArray(string name) {
+
+  vector< int > returnVector;
+
+  JsonArray *json = getBodyAsArray(name);
+  if (json != NULL) {
+    for (int i=0; i < json->CountItem(); i++) {
+	JsonBase* jsonBase = json->GetItem(i);
+	if (jsonBase->IsBasicValue()) {
+	  JsonBasicValue* jsonBasicValue = (JsonBasicValue*)jsonBase;
+	  if (jsonBasicValue->IsString()) {
+	    int value = atoi(jsonBasicValue->ValueAsString().c_str());
+	    returnVector.push_back(value);
+	  }
+	}
+    }
+  }
+  return returnVector;
+};
 
 // --- BaseList ---------------------------------------------------------------
 
