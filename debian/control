@@ -3,7 +3,7 @@ Section: video
 Priority: extra
 Maintainer: Tobias Grimm <etobi@debian.org>
 Build-Depends: debhelper (>= 9), vdr-dev (>= 2.2.0), pkg-config, gettext, libcxxtools-dev
-Standards-Version: 3.9.6
+Standards-Version: 4.1.2
 Homepage: https://github.com/yavdr/vdr-plugin-restfulapi
 
 Package: vdr-plugin-restfulapi
