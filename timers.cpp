@@ -30,12 +30,7 @@ void TimersResponder::createOrUpdateTimer(ostream& out, cxxtools::http::Request&
 {
   QueryHandler q("/timers", request);
 
-
-
-#if APIVERSNUM > 20300
-    LOCK_TIMERS_WRITE;
-    cTimers& timers = *Timers;
-#else
+#if APIVERSNUM < 20300
     cTimers& timers = Timers;
 
 	if ( timers.BeingEdited() ) {
@@ -145,8 +140,14 @@ void TimersResponder::createOrUpdateTimer(ostream& out, cxxtools::http::Request&
   chan = NULL;
   if ( update == false ) { // create timer
      cTimer* timer = new cTimer();
-     if ( timer->Parse(builder.str().c_str()) ) { 
+     if ( timer->Parse(builder.str().c_str()) ) {
+#if APIVERSNUM > 20300
+        LOCK_TIMERS_WRITE;
+        Timers->SetExplicitModify();
+        cTimer* checkTimer = Timers->GetTimer(timer);
+#else
         cTimer* checkTimer = timers.GetTimer(timer);
+#endif
         if ( checkTimer != NULL ) {
            delete timer;
            reply.httpReturn(403, "Timer already defined!"); 
@@ -154,14 +155,13 @@ void TimersResponder::createOrUpdateTimer(ostream& out, cxxtools::http::Request&
         } else {
            replyCreatedId(timer, request, reply, out);
 #if APIVERSNUM > 20300
-
            LOCK_SCHEDULES_READ;
            timer->SetEventFromSchedule(Schedules);
+           Timers->Add(timer);
+           Timers->SetModified();
 #else
            timer->SetEventFromSchedule();
-#endif
            timers.Add(timer);
-#if APIVERSNUM <= 20300
            timers.SetModified();
 #endif
            esyslog("restfulapi: timer created!");
@@ -173,12 +173,12 @@ void TimersResponder::createOrUpdateTimer(ostream& out, cxxtools::http::Request&
   } else {
      if ( timer_orig->Parse(builder.str().c_str()) ) {
 #if APIVERSNUM > 20300
-
-           LOCK_SCHEDULES_READ;
-           timer_orig->SetEventFromSchedule(Schedules);
+        LOCK_SCHEDULES_READ;
+        timer_orig->SetEventFromSchedule(Schedules);
+        //Timers->SetModified();
 #else
-           timer_orig->SetEventFromSchedule();
-           timers.SetModified();
+        timer_orig->SetEventFromSchedule();
+        timers.SetModified();
 #endif
         replyCreatedId(timer_orig, request, reply, out);
         esyslog("restfulapi: updating timer successful!");
@@ -216,10 +216,7 @@ void TimersResponder::deleteTimer(ostream& out, cxxtools::http::Request& request
 {
   QueryHandler q("/timers", request);
 
-#if APIVERSNUM > 20300
-    LOCK_TIMERS_WRITE;
-    cTimers& timers = *Timers;
-#else
+#if APIVERSNUM < 20300
     cTimers& timers = Timers;
 
 	if ( timers.BeingEdited() ) {
@@ -235,16 +232,24 @@ void TimersResponder::deleteTimer(ostream& out, cxxtools::http::Request& request
   if ( timer == NULL) {
      reply.httpReturn(404, "Timer id invalid!");
   } else {
+#if APIVERSNUM > 20300
+      LOCK_TIMERS_WRITE;
+      Timers->SetExplicitModify();
+#endif
      if ( timer->Recording() ) {
         timer->Skip();
 #if APIVERSNUM > 20300
         cRecordControls::Process(Timers, time(NULL));
+     }
+     Timers->Del(timer);
+     Timers->SetModified();
 #else
         cRecordControls::Process(time(NULL));
-#endif
      }
      timers.Del(timer);
      timers.SetModified();
+#endif
+
      reply.httpReturn(200, "Timer deleted."); 
   }
 }
@@ -253,10 +258,7 @@ void TimersResponder::replyBulkdelete(std::ostream& out, cxxtools::http::Request
 
   QueryHandler q("/timers/bulkdelete", request);
 
-#if APIVERSNUM > 20300
-    LOCK_TIMERS_WRITE;
-    cTimers& timers = *Timers;
-#else
+#if APIVERSNUM < 20300
     cTimers& timers = Timers;
 
 	if ( timers.BeingEdited() ) {
@@ -298,16 +300,23 @@ void TimersResponder::replyBulkdelete(std::ostream& out, cxxtools::http::Request
     if ( timer == NULL ) {
 	result.deleted = false;
     } else {
+#if APIVERSNUM > 20300
+      LOCK_TIMERS_WRITE;
+      Timers->SetExplicitModify();
+#endif
       if ( timer->Recording() ) {
-	timer->Skip();
+      timer->Skip();
 #if APIVERSNUM > 20300
         cRecordControls::Process(Timers, time(NULL));
+      }
+      Timers->Del(timer);
+      Timers->SetModified();
 #else
         cRecordControls::Process(time(NULL));
-#endif
       }
       timers.Del(timer);
       timers.SetModified();
+#endif
       result.deleted = true;
     }
     list->addDeleted(result);
