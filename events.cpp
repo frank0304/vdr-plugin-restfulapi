@@ -65,6 +65,8 @@ void EventsResponder::replyEvents(ostream& out, cxxtools::http::Request& request
   string onlyCount = q.getOptionAsString("only_count");
 
 #if APIVERSNUM > 20300
+    /* create a dummer timer lock to avoid deadlock*/
+    LOCK_TIMERS_READ;
     LOCK_CHANNELS_READ;
     const cChannels& channels = *Channels;
 #else
