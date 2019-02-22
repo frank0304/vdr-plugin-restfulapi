@@ -84,7 +84,7 @@ void TimersResponder::createOrUpdateTimer(ostream& out, cxxtools::http::Request&
                         << StringExtension::addZeros((starttime->tm_mon + 1), 2) << "-"
                         << StringExtension::addZeros((starttime->tm_mday), 2);
               day = daystream.str();
- 
+              
               start = starttime->tm_hour * 100 + starttime->tm_min;
 
               struct tm *stoptime = localtime(&estop);
@@ -113,9 +113,15 @@ void TimersResponder::createOrUpdateTimer(ostream& out, cxxtools::http::Request&
         if ( !v.IsStartValid(start) ) { start = timer_orig->Start(); }
         if ( !v.IsWeekdaysValid(weekdays) ) { weekdays = v.ConvertWeekdays(timer_orig->WeekDays()); }
         if ( !v.IsDayValid(day) ) { day = v.ConvertDay(timer_orig->Day()); }
-        if ( chan == NULL ) { chan = (cChannel*)timer_orig->Channel(); }
-        if ( aux == "" ) { aux = v.ConvertAux(timer_orig->Aux()); }
-     }
+        if ( chan == NULL ) { chan = (cChannel*)timer_orig->Channel();}
+        if (aux == "")
+            {
+                if (timer_orig->Aux() != NULL)
+                {
+                    aux = v.ConvertAux(timer_orig->Aux());
+                }
+            }
+        }
   }
 
   if (error) {
@@ -136,7 +142,7 @@ void TimersResponder::createOrUpdateTimer(ostream& out, cxxtools::http::Request&
           << file << ":" 
           << aux;
 
-  dsyslog("restfulapi: /%s/ ", builder.str().c_str());
+  dsyslog("restfulapi timer info: /%s/ ", builder.str().c_str());
   chan = NULL;
   if ( update == false ) { // create timer
      cTimer* timer = new cTimer();
