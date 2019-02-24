@@ -54,11 +54,13 @@ void TimersResponder::createOrUpdateTimer(ostream& out, cxxtools::http::Request&
   string day = v.ConvertDay(q.getBodyAsString("day"));
   const cChannel* chan = v.ConvertChannel(q.getBodyAsString("channel"));
   cTimer* timer_orig = v.ConvertTimer(q.getBodyAsString("timer_id"));
-  
-  if ( update == false ) { //create
-     int eventid = q.getBodyAsInt("eventid");
-     int minpre = q.getBodyAsInt("minpre");
-     int minpost = q.getBodyAsInt("minpost");
+  const cTimer* timerOrigRead = VdrExtension::getTimer(q.getBodyAsString("timer_id"));
+  int eventid = q.getBodyAsInt("eventid");
+  int minpre = q.getBodyAsInt("minpre");
+  int minpost = q.getBodyAsInt("minpost");
+  if (minpre < 0) minpre = 0;
+  if (minpost < 0) minpost = 0;
+  if ( update == false ) { //create timer by event ID 
      if (eventid >= 0 && chan != NULL) {
         const cEvent* event = VdrExtension::GetEventById((tEventID)eventid, chan);
 
@@ -66,8 +68,6 @@ void TimersResponder::createOrUpdateTimer(ostream& out, cxxtools::http::Request&
            reply.httpReturn(407, "eventid invalid");
            return;
         } else {
-           if (minpre < 0) minpre = 0;
-           if (minpost < 0) minpost = 0;
            if (!v.IsFlagsValid(flags)) flags = 1;
            if (!v.IsFileValid(file)) file = (string)event->Title();
            if (!v.IsWeekdaysValid(weekdays)) weekdays = "-------";
@@ -103,8 +103,34 @@ void TimersResponder::createOrUpdateTimer(ostream& out, cxxtools::http::Request&
         if ( chan == NULL ) { error = true; error_values += "channel, "; }
      }
   } else { //update
-     if ( timer_orig == NULL ) { error = true; error_values += "timer_id, "; }
-     if ( !error ) {
+     if ( (timer_orig == NULL) || (timerOrigRead == NULL) ) { error = true; error_values += "timer_id, "; }
+     if ( !error )
+        {
+            if (!v.IsStopValid(stop) || !v.IsStartValid(start)) /* update timer based on premin and postmin */
+            {
+                tEventID eventid_;   
+                eventid_ = timerOrigRead->Event()->EventID();
+                chan = timerOrigRead->Channel();
+                const cEvent* event = VdrExtension::GetEventById((tEventID)eventid_, chan);                
+                if (event == NULL) {
+                    reply.httpReturn(407, "eventid invalid");
+                    return;
+                }
+                time_t estart = event->StartTime() - minpre * 60;
+                time_t estop = event->EndTime() + minpost * 60;
+              struct tm *starttime = localtime(&estart);
+
+              ostringstream daystream;
+              daystream << StringExtension::addZeros((starttime->tm_year + 1900), 4) << "-"
+                        << StringExtension::addZeros((starttime->tm_mon + 1), 2) << "-"
+                        << StringExtension::addZeros((starttime->tm_mday), 2);
+              day = daystream.str();
+              
+              start = starttime->tm_hour * 100 + starttime->tm_min;
+
+              struct tm *stoptime = localtime(&estop);
+              stop = stoptime->tm_hour * 100 + stoptime->tm_min;
+           }         
         if ( !v.IsFlagsValid(flags) ) { flags = timer_orig->Flags(); }
         if ( !v.IsFileValid(file) ) { file = v.ConvertFile((string)timer_orig->File()); }
         if ( !v.IsLifetimeValid(lifetime) ) { lifetime = timer_orig->Lifetime(); }
